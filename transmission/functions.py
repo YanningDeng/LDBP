@@ -1,4 +1,6 @@
 import numpy as np
+import warnings
+import tensorflow as tf
 
 # }}}
 #========================================================#
@@ -263,3 +265,42 @@ def QAM(M):
     x_qam = ordered_direct_product(x_pam, x_pam)
     const = x_qam[:, 0] + 1j * x_qam[:, 1]
     return const/np.sqrt(np.mean(np.abs(const)**2))
+
+
+def tf_real_symmetric_filter(init_coeffs, opt=False, mask=1):
+    """ Create odd-length symmetric FIR filter with real coefficients
+
+    For symmetric filters of length 2*L+1, there are (L+1) tunable parameters:
+        coeffs: h_L, ..., h_1, [h_0, h_1, ..., h_L]
+
+    Args:
+        init_coeffs: real numpy array of shape [filter_length,] with initial filter coefficients,
+            filter_length should be odd
+            coefficients should be symmetric
+        opt: (Optional) True for variable, False for constant, default=False
+        mask: (Optional) binary mask for pruning, default=1
+
+    Returns:
+        A Tensor with shape = [filter_length]
+    """
+
+    filter_length = len(init_coeffs)
+    if filter_length % 2 is 0:
+        raise ValueError(
+            "filter length has to be odd: filter_length = {}".format(filter_length))
+    filter_delay = (filter_length-1)//2
+    right_half = init_coeffs[filter_delay::]
+
+    for i in range(filter_delay):  # check if symmetric
+        absdiff = abs(init_coeffs[i] - right_half[filter_delay-i])
+        if absdiff > 1e-2:
+            warnings.warn(
+                "inital filter coefficients are not symmetric: absolute difference = {}".format(absdiff))
+
+    if opt == True:
+        h_vars = tf.Variable(right_half, dtype=tf.float32)
+    else:
+        h_vars = tf.constant(right_half, tf.float32)
+
+    hmasked = h_vars*mask  # apply binary mask for pruning
+    return tf.concat([tf.reverse(hmasked[1:], axis=[0]), hmasked], axis=0)

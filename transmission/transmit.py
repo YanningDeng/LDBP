@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 import argparse as ap
-import tensorflow as tf
+# import tensorflow as tf
 import configparser
 import numpy as np
 import os
@@ -8,6 +8,7 @@ import functions as f
 import scipy as sp
 import time
 import sys
+import network
 
 np.set_printoptions(threshold=np.inf)  # 防止输出太多时被忽略
 # constants
@@ -69,7 +70,7 @@ parser.add_argument("Lr", help="learning rate, e.g., 0.01")
 
 parser.add_argument("iter", help="gradient descent iterations, e.g., 1000")
 parser.add_argument("-c", "--config_path",
-                    help="path to configuration file (default is ldbp_config.ini)", default="ldbp_config.ini")
+                    help="path to configuration file (default is config/isit.ini)", default="../config/isit.ini")
 parser.add_argument(
     "-l", "--logdir", help="directory for log files (default is log)", default="log")
 parser.add_argument(
@@ -222,68 +223,41 @@ ssfm_opts = {
 }
 
 fw = f.ssfm_parameters(ssfm_opts)
-
-# 隐藏层函数
-
-
-def invisible_layer(inputs, in_size, out_size, keep_prob=1.0, activation_function=None):
-    Weights = tf.Variable(tf.truncated_normal([in_size, out_size], stddev=0.1))
-    biases = tf.Variable(tf.zeros([out_size]))
-    Wx_plus_b = tf.matmul(inputs, Weights) + biases
-    if activation_function is None:
-        outputs = Wx_plus_b
-    else:
-        outputs = activation_function(Wx_plus_b)
-        outputs = tf.nn.dropout(outputs, keep_prob)  # 随机失活
-    return outputs
-
-
+# matched filter
+ps_filter = f.tf_real_symmetric_filter(f.rrcosine(rolloff, delay, OS_d))
 # 将结果写入文件
-f = open("result.txt", "w")
+inputf = open("input.txt", "w")
+outputf = open("output.txt", "w")
 for P_dB in np.nditer(P_dB_r):
     P_W = pow(10, P_dB/10)*1e-3
-    print("")
-    print("timing the forward propation ...", file=f)
     t = time.time()
     y_d, x_d, p = forward_propagation(P_W)
     # 将结果输出到文件夹
-    print("y: ", y_d, file=f)
-    print("x: ", x_d, file=f)
-    print("p: ", p, file=f)
-    # 调用network，跑tensorflow方法
-    sess = tf.InteractiveSession()
-    # holder变量
-    x_h = tf.placeholder(tf.float32, [None, 784])
-    y_h = tf.placeholder(tf.float32, [None, 10])
-    keep_prob = tf.placeholder(tf.float32)     # 概率
-
-    for i in range(64):
-        h1 = invisible_layer(x_d, 784, 300, keep_prob, tf.nn.relu)
-        x_d = invisible_layer(h1, 784, 300, keep_prob, tf.nn.relu)
-
-    # 输出层
-    w = tf.Variable(tf.zeros([300, 10]))  # 300*10
-    b = tf.Variable(tf.zeros([10]))
-    y = tf.nn.softmax(tf.matmul(h1, w)+b)
-
-    # 定义loss,optimizer
-    cross_entropy = tf.reduce_mean(-tf.reduce_sum(y_h *
-                                                  tf.log(y), reduction_indices=[1]))
-    train_step = tf.train.AdagradOptimizer(0.35).minimize(cross_entropy)
-
-    correct_prediction = tf.equal(tf.argmax(y, 1), tf.argmax(y_h, 1))  # 高维度的
-    acuracy = tf.reduce_mean(
-        tf.cast(correct_prediction, tf.float32))  # 要用reduce_mean
-
-    tf.global_variables_initializer().run()
-    for i in range(3000):  # 3000是循环次数
-        batch_x, batch_y = y_d.next_batch(100)
-        train_step.run({x_h: batch_x, y_h: batch_y, keep_prob: 0.75})
-        if i % 1000 == 0:
-            train_accuracy = acuracy.eval(
-                {x_h: batch_x, y_h: batch_y, keep_prob: 1.0})
-            print("step %d,train_accuracy %g" % (i, train_accuracy))
+    print(y_d, file=outputf)
+    print(x_d, file=inputf)
+    # matched filter
+    # y = cconv(y_d, ps_filter)  # complex(y) = complex(x) * real(h)
+    # y = tf.complex(y[:, :, 0], y[:, :, 1])
+    # # downsample
+    # y = y[:, ::OS_d] / tf.complex(tf.sqrt(P_W), 0.0) / np.sqrt(OS_d)
+    # xr = x_d[:, :, 0]
+    # xi = x_d[:, :, 1]
+    # train_X = tf.stack([xr, xi], aixes=2)
+    # train_Y = y_d
+    # y_hat = network.myLinearRegression(
+    #     train_X, train_Y, iterations, learning_rate)
+    # # 调用network，跑tensorflow方法
+    # sess = tf.InteractiveSession()
+    # # holder变量，输入层
+    # tf.global_variables_initializer().run()
+    # for i in range(3000):  # 3000是循环次数
+    #     batch_x, batch_y = y_d.next_batch(100)
+    #     train_step.run({x_h: batch_x, y_h: batch_y, keep_prob: 0.75})
+    #     if i % 1000 == 0:
+    #         train_accuracy = acuracy.eval(
+    #             {x_h: batch_x, y_h: batch_y, keep_prob: 1.0})
+    #         print("step %d,train_accuracy %g" % (i, train_accuracy))
 
     elapsed = time.time()-t
-    print("{0:.2f} seconds to generate 1 input/output data pair".format(elapsed), file=f)
+    print("{0:.2f} seconds to generate 1 input/output data pair".format(elapsed))
     sys.exit("")
