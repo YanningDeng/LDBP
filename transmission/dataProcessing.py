@@ -1,9 +1,70 @@
 #!/usr/bin/env python
+import math
+
 import numpy as np
 from PIL import Image
 import os
 from sklearn.model_selection import train_test_split
 import scipy.io as scio
+
+def readPredictionInTxt(filename):
+    """
+    Function:
+        the file organize in one row,delimiter is space,element like [[float]]
+    Return:
+        data:np array
+    """
+    data=[]
+    file=open(filename,'r')
+    lines=file.readlines()
+    strings=lines[0].strip().split(" ")
+    for s in strings:
+        tmp=s[2:-2]
+        data.append(float(tmp))
+    return np.array(data)
+
+def hardDecision(point):
+    """
+    Args:
+        point:[realpart,imagpart],dtype=float
+    Returns:
+        standard point:np.array()
+    """
+    real_standard_part=[-3,-1,1,3]
+    minDistance=10000000000.00
+    minp=0
+    minq=0
+    for p in real_standard_part:
+        for q in real_standard_part:
+            distance=(point[0]-p)**2+(point[1]-q)**2
+            if(distance<minDistance):
+                minp=p
+                minq=q
+                minDistance=distance
+
+    # print(point,[minp,minq])
+    return [minp,minq]
+
+
+
+def hardDecisionSingalPart(points):
+    """
+    Args:
+        points:np array,N*1
+    Return:
+        res:standard point,np array,N*1
+    """
+    res=[]
+    standard=np.array([-3,-1,1,3])
+    for point in points:
+        distances=np.abs(point-standard)
+        # print(distances)
+        tmp=standard[np.argmin(distances)]
+        # print(point,tmp)
+        res.append(tmp)
+    return np.array(res)
+
+
 
 def readXYInTxt(filename):
     """
@@ -12,7 +73,7 @@ def readXYInTxt(filename):
     Args:
         filename:the name of file
     Return:
-        X and Y,both np.array
+        X and Y,both np.array,dtype=float
     """
     file=open(filename,'r')
     lines=file.readlines()
@@ -28,7 +89,57 @@ def readXYInTxt(filename):
         Y.append(float(stry))
     return np.array(X),np.array(Y)
 
-def prepareData(data_path, test_percent, inFile,outFile):
+
+def calBerFromRealImagFile(predRealFile, predImagFile, refRealFile, refImagFile,isY):
+    """
+    Args:
+        predRealFile,predImagFile:element like [[1.0330029]],use readPredictionInTxt process
+        isY:bool，是否是Y路信号
+
+        refRealFile,refImagFile: element like a\t,use readXYInTxt process
+    """
+    pred_real=readPredictionInTxt(predRealFile)
+    pred_imag=readPredictionInTxt(predImagFile)
+    if(isY):
+        _,ref_real=readXYInTxt(refRealFile)
+        _,ref_imag=readXYInTxt(refImagFile)
+    else:
+        ref_real,_ = readXYInTxt(refRealFile)
+        ref_imag,_ = readXYInTxt(refImagFile)
+
+
+    bits_mps={"-3,-3":[0,0,1,0],"-3,-1":[0,0,1,1],"-3,1":[0,0,0,1],"-3,3":[0,0,0,0],
+              "-1,-3":[0,1,1,0],"-1,-1":[0,1,1,1],"-1,1":[0,1,0,1],"-1,3":[0,1,0,0],
+              "1,-3":[1,1,1,0],"1,-1":[1,1,1,1],"1,1":[1,1,0,1],"1,3":[1,1,0,0],
+              "3,-3":[1,0,1,0],"3,-1":[1,0,1,1],"3,1":[1,0,0,1],"3,3":[1,0,0,0]}
+
+    #组合数据
+    pred_data=[]
+    pred_bits=[]
+    ref_data=[]
+    ref_bits=[]
+    for i in range(len(ref_real)):
+        pred_t=[pred_real[i],pred_imag[i]]
+        ref_t=[int(ref_real[i]),int(ref_imag[i])]
+
+        pred_t=hardDecision(pred_t) #硬判决
+
+
+        #转换成字符串以在字典中匹配
+        predStr=",".join(str(v) for v in pred_t)
+        refStr=",".join(str(v) for v in ref_t)
+        pred_data.append(pred_t)
+        ref_data.append(ref_t)
+        pred_bits.extend(bits_mps[predStr])
+        ref_bits.extend(bits_mps[refStr])
+    print(pred_bits)
+    print(ref_bits)
+    pred_bits_np=np.array(pred_bits)
+    ref_bits_np=np.array(ref_bits)
+
+    return sum(pred_bits_np!=ref_bits_np)/len(pred_bits)
+
+def prepareData(data_path, test_percent, inFile,outFile,isY):
     """
     Function:prepare data for network training
     Args:
@@ -36,47 +147,24 @@ def prepareData(data_path, test_percent, inFile,outFile):
         test_percent: test data / total data
         inFile:the filename of vpi input data
         outFile:the filename of vpi output data
+        isY:bool,是否是Y路信号
     Return:
-        train_X,test_X,train_Y,test_Y
+        train_X,test_X,train_Y,test_Y:np.array
     """
     alldata_x,alldata_y = readXYInTxt(data_path+inFile)
 
-    # alldata_y = readSourceDataFromVPI(data_path + "bits_Y")
-
-    # X_Y=np.vstack((alldata_x,alldata_y))
-
     afterVPI_x, afterVPI_y = readXYInTxt(data_path + outFile)
 
-    # afterVPI_X_Y=np.vstack((afterVPI_x,afterVPI_y))
     #随机抽取
-    X_train,X_test,Y_train,Y_test=train_test_split(afterVPI_x,alldata_x,test_size=test_percent,random_state=0)
+    if(isY):
+        X_train,X_test,Y_train,Y_test=train_test_split(afterVPI_y,alldata_y,test_size=test_percent,random_state=0)
+    else:
+        X_train, X_test, Y_train, Y_test = train_test_split(afterVPI_x, alldata_x, test_size=test_percent,
+                                                            random_state=0)
 
     return X_train,X_test,Y_train,Y_test
 
-def hardDecision(sig):
-    """
-    Function: Return the most closest standard point
-    Args:
-        sig: len is 2.
-    Return
-        standard signal
-    """
-    standard_point=[[-3,-3],[-3,-1],[-3,1],[-3,3],[-1,-3],[-1,-1],[-1,1],[-1,3],[1,-3],[1,-1],[1,1],[1,3],[3,-3],[3,-1],[3,1],[3,3]]
-    mindiff=10000000000000
-    res=[]
-    for s in standard_point:
-        diff=np.power(s[0]-sig[0],2)+np.power(s[1]-sig[1],2)
-        if diff<mindiff:
-            mindiff=diff
-            res=s
-    return res
 
-def next_batch(batchSize,data,index):
-    """
-    Args:
-        batchSize:the size of batch,if data length is not enough,
-
-    """
 
 def getTrainTestDataFromDir(dirname,percent):
     """
@@ -207,6 +295,17 @@ def readSourceDataFromVPI(filename):
         data[i]=[float(np.real(grapCode[curSig])),float(np.imag(grapCode[curSig]))]
     file.close()
     return data
+
+def readTestInTxt(filename):
+    data = []
+    file = open(filename, 'r')
+    lines = file.readlines()
+    strings = lines[0].strip().split(" ")
+    for s in strings:
+
+        data.append(int(float(s)))
+    print(data)
+    return np.array(data)
 #
 # X_train,X_test,Y_train,Y_test=prepareData("../data/-1dBm_20_100/",0.4,"-1dBm-20x100.mat")
 # print(X_train)
@@ -216,7 +315,71 @@ def readSourceDataFromVPI(filename):
 
 # readXYAfterDSPInTxt("result_x.txt")
 
-X_train, X_test, Y_train, Y_test = prepareData("../data/-1dBm_20_100/", 0.3,"ref.txt", "result.txt")
-print(len(X_train))
-print(X_train)
-print(Y_train)
+# X_train, X_test, Y_train, Y_test = prepareData("../data/-1dBm_20_100/", 0.3,"ref.txt", "result.txt")
+# print(len(X_train))
+# print(X_train)
+# print(Y_train)
+
+
+def calAllDataBerY():
+    """
+    计算所有功率下的数据的预测ber
+    isY：bool，是否是Y路信号
+    """
+    dataDir="/Users/deng/MySources/Optics/Code/ldbp_dyn/LDBP/data"
+    allDirectorys=os.listdir(dataDir)
+    berFile=open(dataDir+"/ber_y.txt","w")
+
+    print(allDirectorys)
+    for dir in allDirectorys:
+        if os.path.isdir(dataDir+"/"+dir):
+            predRealFile=dataDir+"/"+dir+"/prediction/real_y_"+dir+"_2000.txt"
+            predImagFile=dataDir+"/"+dir+"/prediction/imag_y_"+dir+"_2000.txt"
+            refRealFile=dataDir+"/"+dir+"/ref_real.txt"
+            refImagFile=dataDir+"/"+dir+"/ref_imag.txt"
+            ber=calBerFromRealImagFile(predRealFile,predImagFile,refRealFile,refImagFile,True)
+            print(dir,ber)
+            berFile.write(dir+" "+str(ber)+"\n")
+    berFile.close()
+
+def calAllDataBerX():
+    """
+    计算X路信号所有功率下的数据的预测ber
+    """
+    dataDir="/Users/deng/MySources/Optics/Code/ldbp_dyn/LDBP/data"
+    allDirectorys=os.listdir(dataDir)
+    berFile=open(dataDir+"/ber_x.txt","w")
+
+    print(allDirectorys)
+    for dir in allDirectorys:
+        if os.path.isdir(dataDir+"/"+dir):
+            predRealFile=dataDir+"/"+dir+"/prediction/real_x_"+dir+"_2000.txt"
+            predImagFile=dataDir+"/"+dir+"/prediction/imag_x_"+dir+"_2000.txt"
+            refRealFile=dataDir+"/"+dir+"/ref_real.txt"
+            refImagFile=dataDir+"/"+dir+"/ref_imag.txt"
+            ber=calBerFromRealImagFile(predRealFile,predImagFile,refRealFile,refImagFile,False)
+            print(dir,ber)
+            berFile.write(dir+" "+str(ber)+"\n")
+    berFile.close()
+def calAllDataBerY():
+    """
+    计算X路信号所有功率下的数据的预测ber
+    """
+    dataDir="/Users/deng/MySources/Optics/Code/ldbp_dyn/LDBP/data"
+    allDirectorys=os.listdir(dataDir)
+    berFile=open(dataDir+"/ber_y.txt","w")
+
+    print(allDirectorys)
+    for dir in allDirectorys:
+        if os.path.isdir(dataDir+"/"+dir):
+            predRealFile=dataDir+"/"+dir+"/prediction/real_y_"+dir+"_2000.txt"
+            predImagFile=dataDir+"/"+dir+"/prediction/imag_y_"+dir+"_2000.txt"
+            refRealFile=dataDir+"/"+dir+"/ref_real.txt"
+            refImagFile=dataDir+"/"+dir+"/ref_imag.txt"
+            ber=calBerFromRealImagFile(predRealFile,predImagFile,refRealFile,refImagFile,True)
+            print(dir,ber)
+            berFile.write(dir+" "+str(ber)+"\n")
+    berFile.close()
+# calAllDataBerX()
+# calAllDataBerY()
+
